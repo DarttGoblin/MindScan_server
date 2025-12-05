@@ -9,10 +9,12 @@ import io
 app = Flask(__name__)
 CORS(app)
 
-# Load the model
-model = load_model("models/mobilenetv2/binary_classifier/binary_brain_mri_model.keras")
+# Load models
+binary_model = load_model("models/mobilenetv2/binary_classifier/binary_brain_mri_model.keras")
+multi_model = load_model("models/mobilenetv2/multi_classifier/multi_brain_mri_model.keras")
+tumor_classes = ['glioma', 'meningioma', 'pituitary']
 
-# Define preprocessing
+# Preprocessing
 def preprocess_image(img):
     img = img.resize((224, 224))
     img_array = image.img_to_array(img)
@@ -25,45 +27,26 @@ def predict():
     if 'image' not in request.files:
         return jsonify({"error": "No image provided"}), 400
     
-    image_file = request.files['image']
-    img_bytes = image_file.read()
+    img_file = request.files['image']
+    img_bytes = img_file.read()
     img = Image.open(io.BytesIO(img_bytes)).convert('RGB')
     input_array = preprocess_image(img)
 
-    preds = model.predict(input_array)
-    confidence = float(np.max(preds))
-    label = "tumor" if np.argmax(preds) == 1 else "normal"
-    
-    return jsonify({"prediction": label, "confidence": confidence})
+    # Binary prediction
+    binary_preds = binary_model.predict(input_array)
+    binary_conf = float(np.max(binary_preds))
+    binary_label = "tumor" if np.argmax(binary_preds) == 1 else "normal"
 
-if __name__ == "__main__":
-    app.run(debug=True)
+    response = {"binary_prediction": binary_label, "binary_confidence": binary_conf}
 
+    # Multi-class prediction if tumor
+    if binary_label == "tumor":
+        multi_preds = multi_model.predict(input_array)
+        multi_conf = float(np.max(multi_preds))
+        multi_label = tumor_classes[np.argmax(multi_preds)]
+        response.update({"multi_prediction": multi_label, "multi_confidence": multi_conf})
 
-# Define preprocessing
-preprocess = transforms.Compose([
-    transforms.Resize((224, 224)),
-    transforms.ToTensor(),
-    transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
-])
-
-@app.route("/predict", methods=["POST"])
-def predict():
-    if 'image' not in request.files:
-        return jsonify({"error": "No image provided"}), 400
-    
-    image_file = request.files['image']
-    img_bytes = image_file.read()
-    img = Image.open(io.BytesIO(img_bytes)).convert('RGB')
-    input_tensor = preprocess(img).unsqueeze(0)  # add batch dimension
-
-    with torch.no_grad():
-        outputs = model(input_tensor)
-        probs = torch.softmax(outputs, dim=1)
-        confidence, pred_class = torch.max(probs, dim=1)
-    
-    label = "tumor" if pred_class.item() == 1 else "normal"
-    return jsonify({"prediction": label, "confidence": confidence.item()})
+    return jsonify(response)
 
 if __name__ == "__main__":
     app.run(debug=True)
